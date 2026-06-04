@@ -1,13 +1,13 @@
 import os
 import random
 import re
-from functools import lru_cache
 
 USE_TRANSFORMERS = os.getenv("USE_TRANSFORMERS", "true").lower() == "true"
-MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/DialoGPT-medium").strip()
+MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/DialoGPT-medium").strip() or "microsoft/DialoGPT-medium"
 MAX_NEW_TOKENS = int(os.getenv("MAX_NEW_TOKENS", "80"))
 
 _generator = None
+_generator_failed = False
 
 CALL_TRIGGERS = (
     "me liga",
@@ -36,7 +36,13 @@ DISCORD_CONTEXT = (
 
 
 def engine_status() -> str:
-    return f"transformers={'on' if USE_TRANSFORMERS else 'off'} model={MODEL_NAME}"
+    if not USE_TRANSFORMERS:
+        return "transformers=off fallback=on"
+    if _generator is not None:
+        return f"transformers=on model={MODEL_NAME} loaded=on"
+    if _generator_failed:
+        return f"transformers=on model={MODEL_NAME} loaded=failed fallback=on"
+    return f"transformers=on model={MODEL_NAME} loaded=lazy"
 
 
 def _extract_user_message(prompt: str) -> str:
@@ -85,7 +91,6 @@ def _detect_mood(text: str) -> str:
     return "neutral"
 
 
-@lru_cache(maxsize=2048)
 def _light_reply(prompt: str) -> str:
     user_text = _extract_user_message(prompt)
     mood = _detect_mood(user_text)
@@ -129,6 +134,7 @@ def _light_reply(prompt: str) -> str:
         return random.choice(["Tamo junto 😄", "de nadaaa", "claro, amg"])
     if any(x in text for x in ("kk", "haha", "engraçado", "absurdo", "aura")):
         return random.choice(["kkkk aura", "aí sim kkk", "muito aura isso aí"])
+
     return random.choice([
         "Entendi. Manda mais um pouco que eu acompanho.",
         "Tlgd. Continua aí.",
@@ -138,21 +144,29 @@ def _light_reply(prompt: str) -> str:
 
 
 def _load_generator():
-    global _generator
+    global _generator, _generator_failed
+
     if _generator is not None:
         return _generator
 
     if not USE_TRANSFORMERS:
         return None
 
-    from transformers import pipeline
+    if _generator_failed:
+        return None
 
-    _generator = pipeline(
-        "text-generation",
-        model=MODEL_NAME,
-        device=-1,
-    )
-    return _generator
+    try:
+        from transformers import pipeline
+
+        _generator = pipeline(
+            "text-generation",
+            model=MODEL_NAME,
+            device=-1,
+        )
+        return _generator
+    except Exception:
+        _generator_failed = True
+        return None
 
 
 def _trim_reply(reply: str) -> str:
@@ -164,9 +178,7 @@ def _trim_reply(reply: str) -> str:
 
 
 def _opening_from_mood(mood: str, display_name: str | None) -> str | None:
-    first_name = (display_name or "").split()[0].strip()
-    if not first_name:
-        first_name = None
+    first_name = (display_name or "").split()[0].strip() or None
 
     choices = {
         "playful": ["kkkk", "mds", "aí sim", "slk"],
@@ -204,6 +216,7 @@ def _humanize(reply: str, display_name: str | None = None, mood: str = "neutral"
         (r"\bestou\b", "tô"),
         (r"\bEstou\b", "Tô"),
     ]
+
     for pattern, replacement in replacements:
         if random.random() < 0.45:
             reply = re.sub(pattern, replacement, reply, flags=re.IGNORECASE)
@@ -246,13 +259,14 @@ def generate_reply(prompt: str, display_name: str | None = None) -> str:
 
     extracted_user = _extract_user_message(prompt)
     mood = _detect_mood(extracted_user)
+    name = display_name or _extract_display_name(prompt)
 
     if _looks_like_call_request(prompt):
-        return _call_excuse(display_name or _extract_display_name(prompt))
+        return _call_excuse(name)
 
     gen = _load_generator()
     if gen is None:
-        return _humanize(_light_reply(prompt), display_name or _extract_display_name(prompt), mood)
+        return _humanize(_light_reply(prompt), name, mood)
 
     full_prompt = (
         "Você é uma pessoa real trocando ideia no Discord. "
@@ -275,15 +289,19 @@ def generate_reply(prompt: str, display_name: str | None = None) -> str:
         "Resposta:"
     )
 
-    out = gen(
-        full_prompt,
-        max_new_tokens=MAX_NEW_TOKENS,
-        do_sample=True,
-        temperature=0.95,
-        top_p=0.93,
-        num_return_sequences=1,
-        pad_token_id=gen.tokenizer.eos_token_id,
-    )[0]["generated_text"]
+    try:
+        out = gen(
+            full_prompt,
+            max_new_tokens=MAX_NEW_TOKENS,
+            do_sample=True,
+            temperature=0.95,
+            top_p=0.93,
+            repetition_penalty=1.08,
+            num_return_sequences=1,
+            pad_token_id=gen.tokenizer.eos_token_id,
+        )[0]["generated_text"]
+    except Exception:
+        return _humanize(_light_reply(prompt), name, mood)
 
     if out.startswith(full_prompt):
         reply = out[len(full_prompt):]
@@ -295,4 +313,4 @@ def generate_reply(prompt: str, display_name: str | None = None) -> str:
         if sep in reply:
             reply = reply.split(sep, 1)[0].strip()
 
-    return _humanize(reply, display_name or _extract_display_name(prompt), mood) or "Putz, travei aqui 😅"
+    return _humanize(reply, name, mood) or "Putz, travei aqui 😅"
