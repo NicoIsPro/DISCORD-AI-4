@@ -21,6 +21,10 @@ PREFIX = os.getenv("PREFIX", "!").strip() or "!"
 ALLOW_DMS = os.getenv("ALLOW_DMS", "true").lower() == "true"
 AUTO_REPLY_ALL_CHANNELS = os.getenv("AUTO_REPLY_ALL_CHANNELS", "false").lower() == "true"
 
+# -------------------------
+# DISCORD SETUP
+# -------------------------
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -40,6 +44,10 @@ bot = commands.Bot(
     allowed_mentions=allowed_mentions
 )
 
+# -------------------------
+# FASTAPI
+# -------------------------
+
 app = FastAPI(title="Discord AI Bot", version="3.1")
 
 memory = MemoryStore(Path("memory.json"))
@@ -47,7 +55,7 @@ synced = False
 
 
 # -------------------------
-# UTIL
+# UTILS
 # -------------------------
 
 def strip_mention(bot_user, text: str) -> str:
@@ -67,17 +75,17 @@ async def warn_if_needed(message: discord.Message, text: str) -> bool:
             await message.reply(warning, mention_author=False)
             return True
     except Exception:
-        logger.exception("Erro no warn")
+        logger.exception("Erro no warn_if_needed")
     return False
 
 
 async def send_ai_reply(message: discord.Message, user_text: str):
-    user_id = str(message.author.id)
-    guild_id = str(message.guild.id) if message.guild else "dm"
-    display_name = message.author.display_name
-    name_hint = infer_real_name_hint(display_name)
-
     try:
+        user_id = str(message.author.id)
+        guild_id = str(message.guild.id) if message.guild else "dm"
+        display_name = message.author.display_name
+        name_hint = infer_real_name_hint(display_name)
+
         profile = memory.get_profile(guild_id, user_id)
 
         prompt = memory.build_prompt(
@@ -112,8 +120,8 @@ async def send_ai_reply(message: discord.Message, user_text: str):
         )
 
     except Exception:
-        logger.exception("Erro na IA")
-        await message.reply("Deu ruim aqui 😅 tenta dnv", mention_author=False)
+        logger.exception("Erro ao gerar resposta IA")
+        await message.reply("deu ruim aqui 😅 tenta dnv", mention_author=False)
 
 
 # -------------------------
@@ -149,19 +157,19 @@ async def on_message(message: discord.Message):
     mentioned = bot.user in message.mentions if bot.user else False
     is_command = content.startswith(PREFIX)
 
-    # garante comandos normais
+    # sempre deixa comandos funcionarem
     if is_command:
         await bot.process_commands(message)
         return
 
-    # modo auto reply geral
+    # auto reply geral
     if AUTO_REPLY_ALL_CHANNELS and content:
         if await warn_if_needed(message, content):
             return
         await send_ai_reply(message, content)
         return
 
-    # resposta por DM ou mention
+    # DM ou mention
     if is_dm or mentioned:
         if mentioned:
             content = strip_mention(bot.user, content)
@@ -226,22 +234,8 @@ async def ai(interaction: discord.Interaction, prompt: str):
     await interaction.followup.send(reply)
 
 
-@bot.tree.command(name="profile", description="Mostra seu perfil salvo")
-async def profile(interaction: discord.Interaction):
-    guild_id = str(interaction.guild.id) if interaction.guild else "dm"
-    user_id = str(interaction.user.id)
-
-    profile = memory.get_profile(guild_id, user_id)
-
-    if not profile:
-        await interaction.response.send_message("n tenho nada salvo sobre vc ainda 😅", ephemeral=True)
-        return
-
-    await interaction.response.send_message(f"`{profile}`", ephemeral=True)
-
-
 # -------------------------
-# FASTAPI
+# FASTAPI ROUTE
 # -------------------------
 
 @app.get("/")
@@ -254,7 +248,7 @@ async def home():
 
 
 # -------------------------
-# STARTUP / SHUTDOWN
+# STARTUP FIX (IMPORTANTE)
 # -------------------------
 
 @app.on_event("startup")
@@ -263,7 +257,12 @@ async def startup():
         logger.warning("DISCORD_TOKEN não definido")
         return
 
-    asyncio.create_task(bot.start(DISCORD_TOKEN))
+    logger.info("Iniciando bot Discord...")
+
+    loop = asyncio.get_event_loop()
+    loop.create_task(bot.start(DISCORD_TOKEN))
+
+    logger.info("Bot rodando em background.")
 
 
 @app.on_event("shutdown")
