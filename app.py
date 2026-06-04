@@ -1,5 +1,6 @@
 import asyncio
 import os
+import logging
 from pathlib import Path
 
 import discord
@@ -12,6 +13,9 @@ from memory_store import MemoryStore, should_warn_language, infer_real_name_hint
 
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("bot")
+
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 PREFIX = os.getenv("PREFIX", "!").strip() or "!"
 ALLOW_DMS = os.getenv("ALLOW_DMS", "true").lower() == "true"
@@ -21,15 +25,32 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 intents.dm_messages = True
+intents.members = True
 
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+allowed_mentions = discord.AllowedMentions(
+    everyone=False,
+    roles=False,
+    users=True,
+    replied_user=False,
+)
+
+bot = commands.Bot(
+    command_prefix=PREFIX,
+    intents=intents,
+    allowed_mentions=allowed_mentions
+)
+
 app = FastAPI(title="Discord AI Bot", version="3.1")
 
 memory = MemoryStore(Path("memory.json"))
 synced = False
 
 
-def strip_bot_mention(bot_user: discord.ClientUser | None, text: str) -> str:
+# -------------------------
+# UTIL
+# -------------------------
+
+def strip_mention(bot_user, text: str) -> str:
     if not bot_user:
         return text
     return (
@@ -39,68 +60,79 @@ def strip_bot_mention(bot_user: discord.ClientUser | None, text: str) -> str:
     )
 
 
-async def maybe_warn(message: discord.Message, text: str) -> bool:
-    """
-    Returns True if a warning was sent and the message should not be answered normally.
-    """
-    warning = should_warn_language(text)
-    if warning:
-        await message.reply(warning, mention_author=False)
-        return True
+async def warn_if_needed(message: discord.Message, text: str) -> bool:
+    try:
+        warning = should_warn_language(text)
+        if warning:
+            await message.reply(warning, mention_author=False)
+            return True
+    except Exception:
+        logger.exception("Erro no warn")
     return False
 
 
-async def ai_answer(message: discord.Message, user_text: str):
+async def send_ai_reply(message: discord.Message, user_text: str):
     user_id = str(message.author.id)
     guild_id = str(message.guild.id) if message.guild else "dm"
     display_name = message.author.display_name
     name_hint = infer_real_name_hint(display_name)
 
-    profile = memory.get_profile(guild_id, user_id)
-    prompt = memory.build_prompt(
-        user_name=display_name,
-        user_text=user_text,
-        profile=profile,
-        guild_id=guild_id,
-        name_hint=name_hint,
-    )
+    try:
+        profile = memory.get_profile(guild_id, user_id)
 
-    reply = await asyncio.to_thread(generate_reply, prompt, display_name)
-    reply = memory.clean_reply(reply)
+        prompt = memory.build_prompt(
+            user_name=display_name,
+            user_text=user_text,
+            profile=profile,
+            guild_id=guild_id,
+            name_hint=name_hint,
+        )
 
-    if not reply:
-        reply = "Putz, travei aqui 😅"
+        reply = await asyncio.to_thread(
+            generate_reply,
+            prompt,
+            display_name
+        )
 
-    memory.update_from_turn(
-        guild_id=guild_id,
-        user_id=user_id,
-        user_text=user_text,
-        bot_text=reply,
-        display_name=display_name,
-    )
+        reply = memory.clean_reply(reply) or "Putz, travei aqui 😅"
 
-    memory.save()
+        memory.update_from_turn(
+            guild_id=guild_id,
+            user_id=user_id,
+            user_text=user_text,
+            bot_text=reply,
+            display_name=display_name,
+        )
+        memory.save()
 
-    allowed = discord.AllowedMentions(
-        everyone=False,
-        roles=False,
-        users=True,
-        replied_user=False,
-    )
-    await message.reply(reply, mention_author=False, allowed_mentions=allowed)
+        await message.reply(
+            reply,
+            mention_author=False,
+            allowed_mentions=allowed_mentions
+        )
 
+    except Exception:
+        logger.exception("Erro na IA")
+        await message.reply("Deu ruim aqui 😅 tenta dnv", mention_author=False)
+
+
+# -------------------------
+# EVENTS
+# -------------------------
 
 @bot.event
 async def on_ready():
     global synced
+
     if not synced:
         try:
             await bot.tree.sync()
-        except Exception as exc:
-            print(f"Falha ao sincronizar comandos: {exc}")
+            logger.info("Slash commands sincronizados.")
+        except Exception:
+            logger.exception("Erro ao sync slash commands")
         synced = True
 
-    print(f"Logado como {bot.user} | {engine_status()}")
+    logger.info(f"Bot online: {bot.user} | {engine_status()}")
 
 
 @bot.event
@@ -109,38 +141,52 @@ async def on_message(message: discord.Message):
         return
 
     is_dm = isinstance(message.channel, discord.DMChannel)
-    mentioned = bot.user in message.mentions if bot.user else False
-    content = message.content.strip()
+    content = (message.content or "").strip()
 
     if is_dm and not ALLOW_DMS:
         return
 
-    if AUTO_REPLY_ALL_CHANNELS and content:
-        if await maybe_warn(message, content):
-            return
-        await ai_answer(message, content)
+    mentioned = bot.user in message.mentions if bot.user else False
+    is_command = content.startswith(PREFIX)
+
+    # garante comandos normais
+    if is_command:
+        await bot.process_commands(message)
         return
 
+    # modo auto reply geral
+    if AUTO_REPLY_ALL_CHANNELS and content:
+        if await warn_if_needed(message, content):
+            return
+        await send_ai_reply(message, content)
+        return
+
+    # resposta por DM ou mention
     if is_dm or mentioned:
         if mentioned:
-            content = strip_bot_mention(bot.user, content)
+            content = strip_mention(bot.user, content)
+
         if content:
-            if await maybe_warn(message, content):
+            if await warn_if_needed(message, content):
                 return
-            await ai_answer(message, content)
+            await send_ai_reply(message, content)
 
     await bot.process_commands(message)
 
 
+# -------------------------
+# COMMANDS
+# -------------------------
+
 @bot.command(name="ping")
-async def ping(ctx: commands.Context):
+async def ping(ctx):
     await ctx.reply("pong 🟢", mention_author=False)
 
 
-@bot.tree.command(name="ai", description="Conversa com a IA.")
+@bot.tree.command(name="ai", description="Conversa com a IA")
 async def ai(interaction: discord.Interaction, prompt: str):
     if should_warn_language(prompt):
-        await interaction.response.send_message("Vou ficar de boa nessa aqui 😅", ephemeral=True)
+        await interaction.response.send_message("vou deixar quieto essa 😅", ephemeral=True)
         return
 
     await interaction.response.defer(thinking=True)
@@ -149,9 +195,10 @@ async def ai(interaction: discord.Interaction, prompt: str):
     guild_id = str(interaction.guild.id) if interaction.guild else "dm"
     display_name = interaction.user.display_name
     name_hint = infer_real_name_hint(display_name)
+
     profile = memory.get_profile(guild_id, user_id)
 
-    prompt_full = memory.build_prompt(
+    full_prompt = memory.build_prompt(
         user_name=display_name,
         user_text=prompt,
         profile=profile,
@@ -159,7 +206,12 @@ async def ai(interaction: discord.Interaction, prompt: str):
         name_hint=name_hint,
     )
 
-    reply = await asyncio.to_thread(generate_reply, prompt_full, display_name)
+    reply = await asyncio.to_thread(
+        generate_reply,
+        full_prompt,
+        display_name
+    )
+
     reply = memory.clean_reply(reply) or "Putz, travei aqui 😅"
 
     memory.update_from_turn(
@@ -174,108 +226,49 @@ async def ai(interaction: discord.Interaction, prompt: str):
     await interaction.followup.send(reply)
 
 
-@bot.tree.command(name="profile", description="Mostra o resumo salvo sobre você.")
+@bot.tree.command(name="profile", description="Mostra seu perfil salvo")
 async def profile(interaction: discord.Interaction):
     guild_id = str(interaction.guild.id) if interaction.guild else "dm"
     user_id = str(interaction.user.id)
+
     profile = memory.get_profile(guild_id, user_id)
+
     if not profile:
-        await interaction.response.send_message("Ainda não tenho nada salvo sobre você.", ephemeral=True)
-        return
-    await interaction.response.send_message(f"Resumo salvo: `{profile}`", ephemeral=True)
-
-
-@bot.tree.command(name="join", description="Entra no canal de voz onde você está.")
-async def join(interaction: discord.Interaction):
-    if not interaction.guild:
-        await interaction.response.send_message("Esse comando só funciona em servidor.", ephemeral=True)
+        await interaction.response.send_message("n tenho nada salvo sobre vc ainda 😅", ephemeral=True)
         return
 
-    member = interaction.user
-    assert isinstance(member, discord.Member)
-
-    if not member.voice or not member.voice.channel:
-        await interaction.response.send_message("Entra em um canal de voz primeiro.", ephemeral=True)
-        return
-
-    channel = member.voice.channel
-    if interaction.guild.voice_client and interaction.guild.voice_client.is_connected():
-        await interaction.guild.voice_client.move_to(channel)
-    else:
-        await channel.connect()
-
-    await interaction.response.send_message(f"Entrei em {channel.mention}.")
+    await interaction.response.send_message(f"`{profile}`", ephemeral=True)
 
 
-@bot.tree.command(name="leave", description="Sai do canal de voz.")
-async def leave(interaction: discord.Interaction):
-    if not interaction.guild or not interaction.guild.voice_client or not interaction.guild.voice_client.is_connected():
-        await interaction.response.send_message("Não estou em canal de voz.", ephemeral=True)
-        return
-
-    await interaction.guild.voice_client.disconnect()
-    await interaction.response.send_message("Saí do canal de voz.")
-
-
-@bot.tree.command(name="say", description="Fala um texto no canal de voz.")
-async def say(interaction: discord.Interaction, text: str):
-    if not interaction.guild:
-        await interaction.response.send_message("Esse comando só funciona em servidor.", ephemeral=True)
-        return
-
-    member = interaction.user
-    assert isinstance(member, discord.Member)
-
-    if not member.voice or not member.voice.channel:
-        await interaction.response.send_message("Entra em um canal de voz primeiro.", ephemeral=True)
-        return
-
-    await interaction.response.defer(thinking=True)
-
-    vc = interaction.guild.voice_client
-    if not vc or not vc.is_connected():
-        vc = await member.voice.channel.connect()
-
-    from gtts import gTTS
-    import tempfile
-
-    tmp = Path(tempfile.mkdtemp(prefix="tts_"))
-    mp3_path = tmp / "tts.mp3"
-
-    try:
-        tts = gTTS(text=text, lang="pt-br")
-        tts.save(str(mp3_path))
-        if vc.is_playing():
-            vc.stop()
-        source = discord.FFmpegPCMAudio(str(mp3_path))
-        vc.play(source)
-        while vc.is_playing():
-            await asyncio.sleep(0.5)
-    finally:
-        try:
-            if mp3_path.exists():
-                mp3_path.unlink()
-            tmp.rmdir()
-        except Exception:
-            pass
-
-    await interaction.followup.send("Pronto.")
-
+# -------------------------
+# FASTAPI
+# -------------------------
 
 @app.get("/")
-async def health():
-    return {"ok": True, "bot": str(bot.user) if bot.user else None}
+async def home():
+    return {
+        "ok": True,
+        "bot": str(bot.user) if bot.user else None,
+        "engine": engine_status()
+    }
 
+
+# -------------------------
+# STARTUP / SHUTDOWN
+# -------------------------
 
 @app.on_event("startup")
 async def startup():
     if not DISCORD_TOKEN:
-        print("DISCORD_TOKEN não definido.")
+        logger.warning("DISCORD_TOKEN não definido")
         return
+
     asyncio.create_task(bot.start(DISCORD_TOKEN))
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    if bot.is_ready():
+    try:
         await bot.close()
+    except Exception:
+        logger.exception("Erro ao encerrar bot")
