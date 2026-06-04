@@ -9,17 +9,17 @@ load_dotenv()
 MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/DialoGPT-medium").strip()
 
 # -------------------------
-# ENGINE STATUS (Correção do ImportError)
+# ENGINE STATUS 
 # -------------------------
 def engine_status():
     return {
         "status": "ready",
         "engine_type": f"HuggingFace Cloud Anonymous ({MODEL_NAME})",
-        "version": "2.0.0_PRO_NATURAL"
+        "version": "2.2.0_PRO_NATURAL_2026"
     }
 
 # -------------------------
-# CALL DETECTION (Seu sistema de Score Robusto)
+# CALL DETECTION
 # -------------------------
 def _looks_like_call_request(prompt: str) -> bool:
     t = prompt.lower().strip()
@@ -48,7 +48,7 @@ def _looks_like_call_request(prompt: str) -> bool:
 
 
 # -------------------------
-# UTILS (Limpeza dos prompts do Discord)
+# UTILS 
 # -------------------------
 def _extract_user_message(prompt: str) -> str:
     match = re.search(r"Mensagem:\s*(.+)", prompt, flags=re.DOTALL)
@@ -94,89 +94,88 @@ def _detect_mood(text: str) -> str:
 
 
 # -------------------------
-# MODO PRO: HUMANIZE ULTRA NATURAL
+# HUMANIZE ULTRA NATURAL
 # -------------------------
 def _trim(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
-    return text[:250] # Resposta de Discord tem que ser curta, ninguém lê textão
+    return text[:250]
 
 
 def _humanize(text: str) -> str:
     text = _trim(text)
     
-    # Dicionário de tradução "Robô -> Humano do Discord"
+    # Substituições com vocabulário atual 
     replacements = [
         (r"\bvocê\b", "vc"),
         (r"\btambém\b", "tbm"),
         (r"\bagora\b", "agr"),
         (r"\bporque\b", "pq"),
         (r"\bnão\b", "n"),
-        (r"\bmais\b", "mó"), # dependendo do contexto da frase fixa o tom informal
         (r"\bdepois\b", "dps"),
         (r"\bcom certeza\b", "ctz"),
         (r"\bmesmo\b", "msm"),
         (r"\birmão\b", "mano"),
-        (r"\bamigo\b", "parça"),
+        (r"\bamigo\b", "bro"),  # Atualizado
         (r"\bverdade\b", "papo reto"),
         (r"\btudo bem\b", "suave"),
         (r"\bcomo vai\b", "eae"),
     ]
 
-    # Aplica as abreviações com 70% de chance para parecer real (humanos às vezes digitam certo)
+    # Aplica abreviações
     for p, r in replacements:
         if random.random() < 0.7:
             text = re.sub(p, r, text, flags=re.IGNORECASE)
 
-    # Força tudo para minúsculo e tira pontos finais (ponto final em chat parece grosseria kkk)
+    # Deixa tudo minúsculo e limpa pontuação robótica
     text = text.lower()
     if text.endswith("."):
         text = text[:-1]
 
-    # Adiciona uma risada ou gíria aleatória no final de vez em quando
+    # Terminações normais
     if random.random() < 0.35:
-        text += random.choice([" kkk", " mano", " slá", " dps vemos", " tmj"])
+        text += random.choice([" kkk", " mano", " bro", " slá", " dps a gnt ve", " tmj"])
 
     return text.strip()
 
 
 # -------------------------
-# FALLBACK EM PORTUGUÊS (Gírias nativas do Discord)
+# FALLBACK EM PORTUGUÊS NEUTRO
 # -------------------------
 def _light_reply(prompt: str) -> str:
     text = _extract_user_message(prompt).lower()
     mood = _detect_mood(text)
 
     if mood == "greeting":
-        return random.choice(["eae mano suave?", "opa, salve parça", "fala tu, de boa?"])
+        return random.choice(["eae bro de boa?", "opa, salve", "fala ai, tudo suave?"])
     
     if mood == "playful":
-        return random.choice(["kkkkkk rachei agora bicho", "os cara n perdoa uma kkk", "mó onda isso aí"])
+        return random.choice(["kkkkkk rachei disso", "os cara n cansam né kkk", "tipo isso msm kkk"])
         
     if mood == "happy":
-        return random.choice(["é nois mano tmj", "boa boa!", "top demais entao"])
+        return random.choice(["é nois mano tmj", "boa boa!", "daora demais"])
         
     if mood == "sad":
-        return random.choice(["pô mano fica assim n, o que rolou?", "mó bad isso aí parça dps melhora", "forças aí mano"])
+        return random.choice(["pô bro, desanima não, o que rolou?", "tenso isso ai dps melhora mano", "forças ai bro"])
 
     if mood == "angry":
-        return random.choice(["calma mano pra q essa agressividade toda kkk", "tá bravo liga pro batman kkk", "relaxa aí po"])
+        return random.choice(["calma mano kkk pra que isso", "tá bravo de graça bro kkk relaxa", "relaxa ai pô"])
 
     if "?" in text:
-        return random.choice(["sei não hein mano, mas posso tentar ver dps", "pior q não sei kkk mas pesquisa aí", "boiei agr, dps te respondo ctz"])
+        return random.choice(["sei não hein mano, mas posso ver dps", "pior q não sei kkk mas pesquisa ai", "boiei agr, dps dou uma olhada"])
 
-    return random.choice(["papo reto mano", "entendi foi tudo kkk", "visão mano", "mó fita", "pode crer"])
+    return random.choice(["papo reto", "entendi foi tudo kkk", "pode crer mano", "complicado né msm", "boto fé"])
 
 
 # -------------------------
-# CALL EXCUSE (Desculpas de quem tá no PC)
+# CALL EXCUSE (Desculpas Neutras)
 # -------------------------
 def _call_excuse(name: str | None) -> str:
     name = (name or "mano").split()[0]
 
     return random.choice([
-        f"boa {name}, n posso entrar em call agr mano, tô sem microfone kkk",
-        f"pô {name}, tá mó barulheira aqui em casa agr, fala por texto msm",
-        "consigo call agora não mano, dps a gente vê isso suave?",
+        f"boa {name}, n consigo entrar em call agr, tô sem fone aqui kkk",
+        f"pô {name}, tá barulho aqui agr, melhor falar por texto msm",
+        "consigo entrar em call agr não bro, dps a gnt se fala suave?",
     ])
 
 
@@ -186,16 +185,14 @@ def _call_excuse(name: str | None) -> str:
 def generate_reply(prompt: str, display_name: str | None = None) -> str:
     prompt = (prompt or "").strip()
     if not prompt:
-        return "manda algo aí pô"
+        return "manda algo ai pô"
 
     user_text = _extract_user_message(prompt)
     name = display_name or _extract_display_name(prompt)
 
-    # 1. 🔥 Trava anti-falso-positivo da Call
     if _looks_like_call_request(user_text):
         return _call_excuse(name)
 
-    # 2. Requisição Anônima dos Transformers (Roda na nuvem da Hugging Face)
     API_URL = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
     payload = {
         "inputs": user_text,
@@ -216,18 +213,15 @@ def generate_reply(prompt: str, display_name: str | None = None) -> str:
                 if out.startswith(user_text):
                     out = out[len(user_text):]
                 
-                # Se o DialoGPT (inglês) mandar algo em branco, joga pro nosso fallback brabo
                 if not out.strip():
                     return _light_reply(prompt)
                     
                 return _humanize(out.strip())
                 
         elif response.status_code == 503:
-            # Se o modelo estiver carregando na nuvem deles, usa nosso fallback de gírias local
             return _light_reply(prompt)
             
     except Exception:
         pass
 
-    # 3. Se a internet falhar ou der timeout, entra o fallback gíria puro
     return _light_reply(prompt)
