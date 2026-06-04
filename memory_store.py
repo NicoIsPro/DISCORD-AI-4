@@ -10,10 +10,10 @@ def should_warn_language(text: str) -> str | None:
 
     bad = ["idiota", "otário", "otaria", "burro", "burra", "lixo", "vai se f", "arromb", "imprestável"]
     if any(x in t for x in bad):
-        return "Sem ofensa, bora trocar a ideia numa boa 😄"
+        return "pô bro, xinga n kkk bora conversar suave"
 
     if "hackear" in t or "roubar" in t or "invadir" in t:
-        return "Não posso ajudar com isso. Posso, sim, ajudar com algo seguro e legal."
+        return "consigo te ajudar com isso não bro... pergunta outra parada aí que seja suave"
     return None
 
 
@@ -45,10 +45,6 @@ KNOWN_NICK_HINTS = {
 
 
 def infer_real_name_hint(display_name: str) -> str | None:
-    """
-    Tenta inferir um nome "mais real" só quando o apelido parece um diminutivo
-    ou apelido clássico. Se for um nick aleatório, devolve None.
-    """
     raw = (display_name or "").strip()
     if not raw:
         return None
@@ -59,30 +55,20 @@ def infer_real_name_hint(display_name: str) -> str | None:
     if not clean:
         return None
 
-    # nicks aleatórios/cheios de números costumam ser impossíveis de adivinhar
     if any(ch.isdigit() for ch in raw):
         return None
 
     if clean in KNOWN_NICK_HINTS:
-        return " ou ".join(KNOWN_NICK_HINTS[clean])
+        return KNOWN_NICK_HINTS[clean][0] 
 
-    # alguns padrões curtos comuns
-    if clean.startswith("nico"):
-        return "Nicolas ou Nicholas"
-    if clean.startswith("lolo"):
-        return "Lorenzo ou Lorena"
-    if clean.startswith("bia"):
-        return "Beatriz ou Bianca"
-    if clean.startswith("duda"):
-        return "Eduarda ou Eduardo"
-    if clean.startswith("gabi"):
-        return "Gabriela ou Gabriel"
-    if clean.startswith("ju"):
-        return "Julia, Júlia ou Juliano"
-    if clean.startswith("fer"):
-        return "Fernando ou Fernanda"
+    if clean.startswith("nico"): return "Nicolas"
+    if clean.startswith("lolo"): return "Lorenzo"
+    if clean.startswith("bia"): return "Beatriz"
+    if clean.startswith("duda"): return "Eduarda"
+    if clean.startswith("gabi"): return "Gabriela"
+    if clean.startswith("ju"): return "Julia"
+    if clean.startswith("fer"): return "Fernando"
 
-    # só tenta adivinhar quando parece apelido de pessoa de verdade
     if len(clean) <= 5 and clean.isalpha():
         return None
 
@@ -100,12 +86,6 @@ class UserProfile:
 
 
 class MemoryStore:
-    """
-    Memória enxuta:
-    - um perfil por usuário por servidor
-    - sobrescreve resumo em vez de crescer sem parar
-    """
-
     def __init__(self, path: Path):
         self.path = path
         self.data: dict[str, Any] = {"guilds": {}}
@@ -159,18 +139,11 @@ class MemoryStore:
         name_hint: str | None = None,
     ) -> str:
         user_text = _normalize(user_text)
-        memory_line = profile or "sem memória ainda"
-        name_hint_line = name_hint or "não deu pra inferir com confiança"
-
+        memory_line = profile or "nenhuma"
+        
         return (
             f"Memória compacta: {memory_line}\n"
             f"Apelido visível: {user_name}\n"
-            f"Possível nome real do apelido: {name_hint_line}\n"
-            f"Contexto do servidor: {guild_id}\n"
-            f"Estilo: fala como uma pessoa real do Discord, com português natural e casual.\n"
-            f"Use vc, agr, tbm, pq e n às vezes. Não force toda hora.\n"
-            f"Quando fizer sentido, chame a pessoa de 'Boa {user_name.split()[0] if user_name else 'amg'}'.\n"
-            f"Se a pessoa pedir call, ligação ou atendimento imediato, responde com uma desculpa curta e humana.\n"
             f"Mensagem: {user_text}"
         )
 
@@ -179,7 +152,6 @@ class MemoryStore:
         user["display_name"] = display_name
         user["turns"] = int(user.get("turns", 0)) + 1
 
-        # salva só o que parece útil
         lower = user_text.lower()
         if any(x in lower for x in ["me chamo", "me chama", "sou o", "eu sou"]):
             user["summary"] = _normalize(user_text)
@@ -192,7 +164,6 @@ class MemoryStore:
         elif len(user_text) <= 60 and any(ch.isalpha() for ch in user_text):
             user["last_topic"] = _normalize(user_text)
 
-        # compacta com o que respondeu, sem crescer demais
         bot_text = _normalize(bot_text)
         if bot_text:
             user["summary"] = self._compress_summary(
