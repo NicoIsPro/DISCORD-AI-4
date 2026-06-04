@@ -15,7 +15,7 @@ def engine_status():
     return {
         "status": "ready",
         "engine_type": f"HuggingFace Cloud Anonymous ({MODEL_NAME})",
-        "version": "2.2.0_PRO_NATURAL_2026"
+        "version": "2.3.0_PRO_NATURAL_FIX"
     }
 
 # -------------------------
@@ -104,7 +104,6 @@ def _trim(text: str) -> str:
 def _humanize(text: str) -> str:
     text = _trim(text)
     
-    # Substituições com vocabulário atual 
     replacements = [
         (r"\bvocê\b", "vc"),
         (r"\btambém\b", "tbm"),
@@ -115,23 +114,20 @@ def _humanize(text: str) -> str:
         (r"\bcom certeza\b", "ctz"),
         (r"\bmesmo\b", "msm"),
         (r"\birmão\b", "mano"),
-        (r"\bamigo\b", "bro"),  # Atualizado
+        (r"\bamigo\b", "bro"),
         (r"\bverdade\b", "papo reto"),
         (r"\btudo bem\b", "suave"),
         (r"\bcomo vai\b", "eae"),
     ]
 
-    # Aplica abreviações
     for p, r in replacements:
         if random.random() < 0.7:
             text = re.sub(p, r, text, flags=re.IGNORECASE)
 
-    # Deixa tudo minúsculo e limpa pontuação robótica
     text = text.lower()
     if text.endswith("."):
         text = text[:-1]
 
-    # Terminações normais
     if random.random() < 0.35:
         text += random.choice([" kkk", " mano", " bro", " slá", " dps a gnt ve", " tmj"])
 
@@ -140,9 +136,10 @@ def _humanize(text: str) -> str:
 
 # -------------------------
 # FALLBACK EM PORTUGUÊS NEUTRO
+# Agora lê só o texto limpo, sem bugar com metadados
 # -------------------------
-def _light_reply(prompt: str) -> str:
-    text = _extract_user_message(prompt).lower()
+def _light_reply(clean_text: str) -> str:
+    text = clean_text.lower()
     mood = _detect_mood(text)
 
     if mood == "greeting":
@@ -167,7 +164,7 @@ def _light_reply(prompt: str) -> str:
 
 
 # -------------------------
-# CALL EXCUSE (Desculpas Neutras)
+# CALL EXCUSE 
 # -------------------------
 def _call_excuse(name: str | None) -> str:
     name = (name or "mano").split()[0]
@@ -187,6 +184,7 @@ def generate_reply(prompt: str, display_name: str | None = None) -> str:
     if not prompt:
         return "manda algo ai pô"
 
+    # Isola puramente a mensagem do usuário
     user_text = _extract_user_message(prompt)
     name = display_name or _extract_display_name(prompt)
 
@@ -204,7 +202,8 @@ def generate_reply(prompt: str, display_name: str | None = None) -> str:
     }
 
     try:
-        response = requests.post(API_URL, json=payload, timeout=5)
+        # AUMENTAMOS O TIMEOUT PARA 15s PRA DAR TEMPO DA IA PENSAR
+        response = requests.post(API_URL, json=payload, timeout=15)
         
         if response.status_code == 200:
             res_json = response.json()
@@ -214,14 +213,17 @@ def generate_reply(prompt: str, display_name: str | None = None) -> str:
                     out = out[len(user_text):]
                 
                 if not out.strip():
-                    return _light_reply(prompt)
+                    return _light_reply(user_text)
                     
                 return _humanize(out.strip())
                 
         elif response.status_code == 503:
-            return _light_reply(prompt)
+            # Se der 503, significa que o servidor da Hugging Face tá carregando o modelo
+            return _light_reply(user_text)
             
     except Exception:
+        # Se a internet falhar ou esgotar os 15s de espera
         pass
 
-    return _light_reply(prompt)
+    # Agora o fallback recebe SÓ o user_text, pra não achar interrogação fantasma
+    return _light_reply(user_text)
